@@ -1,0 +1,7 @@
+version: '3.8'
+services:
+  app:
+    image: hitesh482/jar-demo-app:latest
+    ports:
+      - "8080:8080"
+    restart: always
