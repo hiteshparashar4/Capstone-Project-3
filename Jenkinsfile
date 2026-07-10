@@ -1,55 +1,80 @@
-pipeline {
-    agent any
+#!/usr/bin/env groovy
 
-    environment {
-        IMAGE_NAME = "hitesh482/jar-demo-app"
-        IMAGE_TAG = "latest"
+library identifier: 'jenkins-shared-library@master', retriever: modernSCM(
+  [$class: 'GitSCMSource',
+  remote: 'https://gitlab.com/twn-devops-bootcamp/latest/12-terraform/jenkins-shared-library.git',
+  credentialsId: 'gitlab-credentials'
+  ]
+)
+
+pipeline {   
+  agent any
+  tools {
+    maven 'Maven'
+  }
+  environment {
+    IMAGE_NAME = 'nanatwn/demo-app:java-maven-2.0'
+  }
+  stages {
+    stage("build app") {
+      steps {
+        script {
+          echo 'building application jar...'
+          buildJar()
+        }
+      }
     }
-
-    stages {
-
-        stage('Checkout') {
-            steps {
-                checkout scm
-            }
+    stage("build image") {
+      steps {
+        script {
+          echo 'building docker image...'
+          buildImage(env.IMAGE_NAME)
+          dockerLogin()
+          dockerPush(env.IMAGE_NAME)
         }
-
-        stage('Build Maven') {
-            steps {
-                sh 'mvn clean package'
-            }
-        }
-
-        stage('Build Docker Image') {
-            steps {
-                sh 'docker build -t $IMAGE_NAME:$IMAGE_TAG .'
-            }
-        }
-
-        stage('Push Docker Image') {
-            steps {
-                withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
-                    sh '''
-                    echo $PASS | docker login -u $USER --password-stdin
-                    docker push $IMAGE_NAME:$IMAGE_TAG
-                    '''
-                }
-            }
-        }
-
-        stage('Provision EC2') {
-            steps {
-                dir('terraform') {
-                    sh 'terraform init'
-                    sh 'terraform apply -auto-approve'
-                }
-            }
-        }
-
-        stage('Deploy Application') {
-            steps {
-                sh 'echo "Deploy using Docker Compose on the provisioned EC2 instance."'
-            }
-        }
+      }
     }
+    stage("provision server") {
+      environment {
+        AWS_ACCESS_KEY_ID = credentials('jenkins_aws_access_key_id')
+        AWS_SECRET_ACCESS_KEY = credentials('jenkins-aws_secret_access_key')
+        TF_VAR_env_prefix = 'test'
+      }
+      steps {
+        script {
+          dir('terraform') {
+            sh "terraform init"
+            sh "terraform apply --auto-approve"
+            EC2_PUBLIC_IP = sh(
+              script: "terraform output ec2-public_ip",
+              returnStdout: true
+            ).trim()
+          }
+        }
+      }
+    }
+    stage("deploy") {
+      environment {
+        DOCKER_CREDS = credentials('docker-hub-repo')
+      }
+      steps {
+        script {
+          echo "waiting for EC2 server to initialize"
+          sleep(time: 90, unit: "SECONDS")
+
+          echo 'deploying docker image to EC2...'
+          echo "${EC2_PUBLIC_IP}"
+          
+          def shellCmd = "bash ./server-cmds.sh ${IMAGE_NAME} ${DOCKER_CREDS_USR} ${DOCKER_CREDS_PSW}"
+          def ec2Instance = "ec2-user@${EC2_PUBLIC_IP}"
+
+          sshagent(['server-ssh-key']) {
+            sh "scp -o StrictHostKeyChecking=no server-cmds.sh ${ec2Instance}:/home/ec2-user"
+            sh "scp -o StrictHostKeyChecking=no docker-compose.yaml ${ec2Instance}:/home/ec2-user"
+            sh "ssh -o StrictHostKeyChecking=no ${ec2Instance} ${shellCmd}"
+          }
+        }
+      }
+    }               
+  }
 }
