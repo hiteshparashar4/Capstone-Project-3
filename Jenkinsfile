@@ -2,7 +2,7 @@
 
 library identifier: 'jenkins-shared-library@master', retriever: modernSCM(
   [$class: 'GitSCMSource',
-  remote: 'https://gitlab.com/twn-devops-bootcamp/latest/12-terraform/jenkins-shared-library.git',
+  remote: 'https://github.com/hiteshparashar4/Capstone-Project-3.git',
   credentialsId: 'gitlab-credentials'
   ]
 )
